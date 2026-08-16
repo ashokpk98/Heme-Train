@@ -1,24 +1,16 @@
 import Link from "next/link";
-import { getDemoOrg } from "@/lib/db/queries/org";
+import { withCoach } from "@/lib/auth/session";
 import { listPrograms } from "@/lib/db/queries/programs";
 import { Badge, EmptyState, humanize } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
 
 export default async function ProgramsPage() {
-  const org = await getDemoOrg();
-  if (!org) {
-    return (
-      <div className="p-8">
-        <EmptyState
-          title="No organisation found"
-          hint="Run `npm run db:seed` to populate the database."
-        />
-      </div>
-    );
-  }
+  const { programs, coachName } = await withCoach(async (tx, coach) => ({
+    programs: await listPrograms(tx),
+    coachName: coach.name,
+  }));
 
-  const programs = await listPrograms(org.id);
   const templates = programs.filter((p) => p.isTemplate);
   const working = programs.filter((p) => !p.isTemplate);
 
@@ -27,8 +19,8 @@ export default async function ProgramsPage() {
       <header className="mb-6">
         <h1 className="text-lg font-semibold">Programs</h1>
         <p className="text-xs text-text-faint">
-          Starter templates cover the periodization models in common use. Open
-          one to build in it.
+          Everything here is yours, {coachName} — programs and athletes are
+          private to the coach who owns them.
         </p>
       </header>
 
@@ -40,11 +32,20 @@ export default async function ProgramsPage() {
         </Section>
       )}
 
-      <Section title="Templates">
-        {templates.map((p) => (
-          <ProgramCard key={p.id} program={p} />
-        ))}
-      </Section>
+      {templates.length > 0 ? (
+        <Section title="Templates">
+          {templates.map((p) => (
+            <ProgramCard key={p.id} program={p} />
+          ))}
+        </Section>
+      ) : (
+        working.length === 0 && (
+          <EmptyState
+            title="No programs yet"
+            hint="Run `npm run db:seed` to load the starter templates, or create a program."
+          />
+        )
+      )}
     </div>
   );
 }
@@ -77,6 +78,7 @@ function ProgramCard({
     periodizationModel: string;
     durationWeeks: number;
     isTemplate: boolean;
+    isOrgShared: boolean;
   };
 }) {
   return (
@@ -97,6 +99,7 @@ function ProgramCard({
         </div>
         <div className="flex shrink-0 flex-col items-end gap-1">
           <Badge tone="violet">{humanize(program.periodizationModel)}</Badge>
+          {program.isOrgShared && <Badge tone="info">Shared</Badge>}
           <span className="text-[11px] text-text-faint">
             {program.durationWeeks} weeks
           </span>

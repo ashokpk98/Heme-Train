@@ -2,7 +2,7 @@
 
 HEME is a high performance app which can be used as a program builder and monitoring tool for athletes by a high performance or a strength and conditioning coach.
 
-This repository currently contains **slice 1: the exercise library and program builder**.
+This repository contains the exercise library, the program builder, and coach authentication with per-coach data isolation enforced in the database.
 
 ---
 
@@ -40,18 +40,93 @@ Most competing builders cap at two prescription variables per movement.
 
 ---
 
+## Authentication and data isolation
+
+Supabase Auth for identity, Postgres row level security for authorisation.
+
+**A coach sees only their own athletes — sharing an organisation is not enough.**
+Ownership lives on three roots (`athletes`, `groups`, `programs`) via
+`owner_coach_id`. Everything else inherits visibility from one of those roots.
+
+### Why the tenancy columns are denormalised
+
+`prescribed_sets` sits seven foreign keys away from `organizations`:
+
+```
+prescribed_sets → exercise_slots → session_blocks → sessions
+                → microcycles → program_blocks → programs → organizations
+```
+
+A policy that walked that chain would be evaluated per row on the largest table
+in the system. So every tenant table carries `org_id`, and the program tree also
+carries `program_id`. No policy joins more than once, and the org gate is a plain
+indexed equality that prunes first.
+
+Those columns are filled by `BEFORE INSERT` triggers that read the parent row,
+not by application code — a server action that forgets a field cannot
+desynchronise the security boundary, and a client that submits a forged `org_id`
+has it overwritten.
+
+### RLS is load-bearing, not decorative
+
+Connecting as a superuser silently bypasses every policy, which is how "we added
+RLS" often ends up meaning nothing. There are two connections:
+
+| | Used by | RLS |
+|---|---|---|
+| `db` | seed script, auth callbacks, admin | **bypassed** |
+| `withCoach(fn)` / `withUserId(id, fn)` | every page and server action | **enforced** |
+
+`withUserId` opens a transaction, publishes the user id as the JWT claims that
+`public.auth_uid()` reads, and switches to the `authenticated` role for the rest
+of the transaction. Both are transaction-local, so a pooled connection cannot
+leak one coach's scope into the next request.
+
+> **`drizzle-kit push` disables RLS.** It emits `DISABLE ROW LEVEL SECURITY` for
+> any table that does not declare RLS in the Drizzle schema, which quietly undoes
+> the migration while leaving the policies in place — the database still *looks*
+> configured. `npm run db:push` therefore re-applies `supabase/migrations/` every
+> time, and that file ends with a check that raises if RLS is not active. The
+> test suite refuses to run without it too, because these tests attempt real
+> cross-tenant deletes.
+
 ## Getting started
 
-Requires Node 22+ and Docker (or a local Postgres 16).
+Requires Node 22+ and either a Supabase project or a local Postgres 16.
+
+### Against Supabase
 
 ```bash
-docker compose up -d          # Postgres on :5432
-cp .env.example .env.local
+cp .env.example .env.local    # fill in project URL, anon key, service role key,
+                              # and the pooled DATABASE_URL
 npm install
-npm run db:push               # apply the schema
-npm run db:seed               # 213 exercises, demo org, 5 program templates
+npm run db:push               # schema + RLS policies + triggers
+npm run db:seed               # 213 exercises, 3 coaches, 5 program templates
 npm run dev                   # http://localhost:3000
 ```
+
+Seeded logins (password `heme-demo-1234`):
+
+| Email | Coach | Organisation | Athletes |
+|---|---|---|---|
+| `a1@heme.test` | Alex Reid | HEME Performance | Priya, Marcus |
+| `a2@heme.test` | Jordan Six | HEME Performance | Aisha |
+| `b1@heme.test` | Sam Okafor | Northside Strength | Tom |
+
+A1 and A2 share an organisation deliberately: sign in as each and the athlete
+lists do not overlap.
+
+### Against a local Postgres
+
+```bash
+docker compose up -d
+psql "$DATABASE_URL" -f supabase/local-bootstrap.sql   # emulates Supabase's
+                                                       # auth schema and roles
+npm run db:push && npm run db:seed
+```
+
+Sign-in needs a real Supabase project, but everything about *authorisation* can
+be developed and tested locally this way.
 
 | Script | What it does |
 |---|---|
@@ -59,7 +134,8 @@ npm run dev                   # http://localhost:3000
 | `npm run build` | Production build |
 | `npm test` | Domain-logic unit tests |
 | `npm run typecheck` | `tsc --noEmit` |
-| `npm run db:push` | Push schema to Postgres |
+| `npm run db:push` | Push schema, then re-apply RLS migrations |
+| `npm run db:rls` | Re-apply `supabase/migrations/` only |
 | `npm run db:seed` | Reseed (idempotent — truncates first) |
 | `npm run db:studio` | Drizzle Studio |
 
@@ -90,7 +166,7 @@ Pure and unit-tested, in `src/lib/domain/` — shared by the builder preview, th
 - **`progression.ts`** — progression rules and the presets the builder offers.
 
 ```bash
-npm test   # 40 tests
+npm test   # 62 tests
 ```
 
 ---
@@ -111,4 +187,4 @@ Also outstanding: the athlete-facing app, VBT device integrations (the schema ho
 
 ## Stack
 
-Next.js (App Router) · TypeScript · Postgres + Drizzle · Tailwind · dnd-kit · Vitest
+Next.js (App Router) · TypeScript · Supabase (Auth + Postgres) · Drizzle · Tailwind · dnd-kit · Vitest

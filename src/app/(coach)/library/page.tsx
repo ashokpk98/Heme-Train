@@ -1,12 +1,11 @@
 import { ExerciseLibrary } from "@/components/library/ExerciseLibrary";
 import { listExercises } from "@/lib/db/queries/exercises";
-import { getDemoOrg } from "@/lib/db/queries/org";
+import { withCoach } from "@/lib/auth/session";
 
 export const dynamic = "force-dynamic";
 
 export default async function LibraryPage() {
-  const org = await getDemoOrg();
-  const exercises = await listExercises(org?.id);
+  const exercises = await withCoach((tx) => listExercises(tx));
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
