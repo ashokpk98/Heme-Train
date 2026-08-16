@@ -1,0 +1,177 @@
+@import "tailwindcss";
+
+/*
+ * HEME design tokens.
+ * Light palette on :root; only the tokens change under dark mode so every
+ * component stays theme-agnostic.
+ */
+:root {
+  --bg: oklch(0.985 0.002 250);
+  --surface: oklch(1 0 0);
+  --surface-2: oklch(0.975 0.003 250);
+  --surface-3: oklch(0.955 0.005 250);
+  --border: oklch(0.905 0.006 250);
+  --border-strong: oklch(0.84 0.008 250);
+  --text: oklch(0.21 0.012 260);
+  --text-muted: oklch(0.52 0.012 260);
+  --text-faint: oklch(0.65 0.01 260);
+
+  /* Heme — the iron-bearing pigment of blood. */
+  --accent: oklch(0.53 0.19 22);
+  --accent-hover: oklch(0.47 0.19 22);
+  --accent-soft: oklch(0.95 0.03 22);
+  --accent-text: oklch(1 0 0);
+
+  --ok: oklch(0.58 0.13 155);
+  --ok-soft: oklch(0.95 0.04 155);
+  --warn: oklch(0.68 0.14 75);
+  --warn-soft: oklch(0.96 0.05 75);
+  --info: oklch(0.55 0.13 250);
+  --info-soft: oklch(0.95 0.035 250);
+  --violet: oklch(0.55 0.16 300);
+  --violet-soft: oklch(0.95 0.04 300);
+
+  --radius: 0.5rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: oklch(0.17 0.008 260);
+    --surface: oklch(0.215 0.009 260);
+    --surface-2: oklch(0.25 0.01 260);
+    --surface-3: oklch(0.29 0.011 260);
+    --border: oklch(0.32 0.012 260);
+    --border-strong: oklch(0.42 0.014 260);
+    --text: oklch(0.95 0.004 260);
+    --text-muted: oklch(0.72 0.01 260);
+    --text-faint: oklch(0.58 0.01 260);
+
+    --accent: oklch(0.63 0.18 22);
+    --accent-hover: oklch(0.69 0.18 22);
+    --accent-soft: oklch(0.3 0.07 22);
+    --accent-text: oklch(0.14 0.01 22);
+
+    --ok: oklch(0.7 0.14 155);
+    --ok-soft: oklch(0.3 0.06 155);
+    --warn: oklch(0.78 0.14 75);
+    --warn-soft: oklch(0.32 0.06 75);
+    --info: oklch(0.68 0.13 250);
+    --info-soft: oklch(0.3 0.06 250);
+    --violet: oklch(0.7 0.15 300);
+    --violet-soft: oklch(0.31 0.06 300);
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: oklch(0.17 0.008 260);
+  --surface: oklch(0.215 0.009 260);
+  --surface-2: oklch(0.25 0.01 260);
+  --surface-3: oklch(0.29 0.011 260);
+  --border: oklch(0.32 0.012 260);
+  --border-strong: oklch(0.42 0.014 260);
+  --text: oklch(0.95 0.004 260);
+  --text-muted: oklch(0.72 0.01 260);
+  --text-faint: oklch(0.58 0.01 260);
+  --accent: oklch(0.63 0.18 22);
+  --accent-hover: oklch(0.69 0.18 22);
+  --accent-soft: oklch(0.3 0.07 22);
+  --accent-text: oklch(0.14 0.01 22);
+  --ok: oklch(0.7 0.14 155);
+  --ok-soft: oklch(0.3 0.06 155);
+  --warn: oklch(0.78 0.14 75);
+  --warn-soft: oklch(0.32 0.06 75);
+  --info: oklch(0.68 0.13 250);
+  --info-soft: oklch(0.3 0.06 250);
+  --violet: oklch(0.7 0.15 300);
+  --violet-soft: oklch(0.31 0.06 300);
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-text: var(--text);
+  --color-text-muted: var(--text-muted);
+  --color-text-faint: var(--text-faint);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-text: var(--accent-text);
+  --color-ok: var(--ok);
+  --color-ok-soft: var(--ok-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+  --color-violet: var(--violet);
+  --color-violet-soft: var(--violet-soft);
+  --radius-DEFAULT: var(--radius);
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+* {
+  border-color: var(--border);
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Form controls inherit the theme rather than the OS default. */
+input,
+select,
+textarea,
+button {
+  font: inherit;
+  color: inherit;
+}
+
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 999px;
+  border: 3px solid var(--bg);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-faint);
+}
+
+@utility field {
+  width: 100%;
+  border-radius: var(--radius);
+  border-width: 1px;
+  border-color: var(--border);
+  background: var(--surface);
+  padding: 0.375rem 0.5rem;
+  font-size: 0.8125rem;
+  outline: none;
+}
+@utility field-focus {
+  &:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+}
