@@ -56,22 +56,19 @@ update auth.users set
   reauthentication_token     = coalesce(reauthentication_token, '');
 
 /*
- * Then stop it happening again.
+ * Defaulting these columns to '' would stop any future hand-written insert
+ * reintroducing the NULL, and it is deliberately NOT done here.
  *
- * Defaulting these to '' means a future insert that omits them — another seed
- * run, a manual fixture, anything written by hand — cannot store the NULL that
- * breaks sign-in. The auth service is unaffected either way, because it always
- * writes these columns explicitly; the default only catches writers that don't.
+ * On a hosted project auth.users is owned by supabase_auth_admin, while the SQL
+ * Editor connects as postgres, so `alter table auth.users` fails with
+ *
+ *   ERROR: 42501: must be owner of table users
+ *
+ * and — because the editor runs a script as one transaction — takes the UPDATE
+ * above down with it. A hardening step that can silently revert the repair it
+ * ships with is worse than no hardening step. Prevention lives in the seed
+ * generator instead, which writes '' explicitly.
  */
-alter table auth.users
-  alter column confirmation_token         set default '',
-  alter column recovery_token             set default '',
-  alter column email_change               set default '',
-  alter column email_change_token_new     set default '',
-  alter column email_change_token_current set default '',
-  alter column phone_change               set default '',
-  alter column phone_change_token         set default '',
-  alter column reauthentication_token     set default '';
 
 update auth.users
    set encrypted_password = extensions.crypt(
