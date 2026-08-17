@@ -26,17 +26,49 @@ $$;
 -- The connecting role must be able to `set role authenticated`.
 grant anon, authenticated, service_role to postgres;
 
+/* --------------------------- extensions schema -------------------------- */
+
+-- Supabase installs pgcrypto into `extensions`; the generated SQL calls
+-- extensions.crypt() and extensions.gen_random_uuid() by that path.
+create schema if not exists extensions;
+create extension if not exists pgcrypto with schema extensions;
+grant usage on schema extensions to anon, authenticated, service_role;
+
 /* ----------------------------- auth schema ----------------------------- */
 
 create schema if not exists auth;
 
--- Mirrors the columns of Supabase's auth.users that this app actually reads.
+-- Mirrors the shape of Supabase's auth.users closely enough that SQL written
+-- against a real project runs here unchanged. Not every column is present on
+-- Supabase-managed instances' newer revisions, but these are the stable ones
+-- the generated seed touches.
 create table if not exists auth.users (
-  id uuid primary key default gen_random_uuid(),
-  email text unique,
-  encrypted_password text,
+  instance_id uuid,
+  id uuid primary key default extensions.gen_random_uuid(),
+  aud varchar(255),
+  role varchar(255),
+  email varchar(255) unique,
+  encrypted_password varchar(255),
+  email_confirmed_at timestamptz,
+  raw_app_meta_data jsonb not null default '{}'::jsonb,
   raw_user_meta_data jsonb not null default '{}'::jsonb,
-  created_at timestamptz not null default now()
+  is_sso_user boolean not null default false,
+  is_anonymous boolean not null default false,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+-- GoTrue requires an identities row per provider for email/password sign-in.
+create table if not exists auth.identities (
+  id uuid primary key default extensions.gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  provider_id text not null,
+  identity_data jsonb not null,
+  provider text not null,
+  last_sign_in_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (provider_id, provider)
 );
 
 /* --------------------------- auth.uid() shim --------------------------- */

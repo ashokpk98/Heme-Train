@@ -22,3 +22,5 @@ tsconfig.tsbuildinfo
 
 coverage/
 .drizzle/
+
+# Generated SQL bundles are committed deliberately (see supabase/dist/README.md)
