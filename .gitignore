@@ -23,4 +23,9 @@ tsconfig.tsbuildinfo
 coverage/
 .drizzle/
 
-# Generated SQL bundles are committed deliberately (see supabase/dist/README.md)
+# Generated SQL bundles are committed deliberately (see supabase/dist/README.md).
+# The negation is required: `dist/` above matches any directory of that name at
+# any depth, including this one, and git will not descend into an excluded
+# directory — so without this line the bundles are silently absent from the repo
+# and the only copy anyone has is whatever was last pasted somewhere.
+!supabase/dist/

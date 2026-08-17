@@ -54,8 +54,39 @@ create table if not exists auth.users (
   raw_user_meta_data jsonb not null default '{}'::jsonb,
   is_sso_user boolean not null default false,
   is_anonymous boolean not null default false,
+  banned_until timestamptz,
+  deleted_at timestamptz,
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+
+  /*
+   * These are here to reproduce a real failure, not for completeness.
+   *
+   * GoTrue's Go structs map every one of these to a plain `string`, which
+   * cannot hold NULL. Supabase declares them nullable with no default, so a
+   * row inserted by hand that omits them stores NULL — and then *any* query
+   * touching that user crashes the auth service:
+   *
+   *   sql: Scan error on column index 3, name "confirmation_token":
+   *   converting NULL to string is unsupported
+   *
+   * That surfaces as HTTP 500 "Database error querying schema" on sign-in, and
+   * it breaks the Admin API too, so listing or updating the user cannot repair
+   * it either. Every column is present in the database and the password hash
+   * verifies correctly — the row looks perfect from SQL.
+   *
+   * Declared nullable with no default deliberately, exactly as Supabase has
+   * them, so the seed is tested against the shape that actually bites rather
+   * than a forgiving one.
+   */
+  confirmation_token varchar(255),
+  recovery_token varchar(255),
+  email_change varchar(255),
+  email_change_token_new varchar(255),
+  email_change_token_current varchar(255),
+  phone_change varchar(255),
+  phone_change_token varchar(255),
+  reauthentication_token varchar(255)
 );
 
 -- GoTrue requires an identities row per provider for email/password sign-in.

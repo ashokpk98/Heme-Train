@@ -18,7 +18,7 @@
  * Run: npx tsx scripts/build-supabase-sql.ts
  */
 
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import postgres from "postgres";
 
@@ -181,12 +181,29 @@ begin;
 -- Inserted directly because the Admin API is not being used here. The
 -- password is bcrypt-hashed with pgcrypto, and an auth.identities row is
 -- added because GoTrue requires one for email/password sign-in.
+--
+-- The empty strings on the token columns are load-bearing. GoTrue maps each
+-- of them to a Go string, which cannot hold NULL, while Supabase declares
+-- them nullable with no default. Omit them here and they store NULL, and
+-- then every sign-in fails with HTTP 500:
+--
+--   sql: Scan error on column index 3, name "confirmation_token":
+--   converting NULL to string is unsupported
+--
+-- The row looks perfect in SQL when this happens — the password hash
+-- verifies, the email is confirmed, the identity row exists — because the
+-- fault is a type mismatch in the reader, not bad data. It also breaks the
+-- Admin API, so the usual escape hatch of resetting the password through
+-- Supabase is closed too.
 -- ===================================================================
 
 insert into auth.users (
   instance_id, id, aud, role, email, encrypted_password,
   email_confirmed_at, created_at, updated_at,
-  raw_app_meta_data, raw_user_meta_data, is_sso_user, is_anonymous
+  raw_app_meta_data, raw_user_meta_data, is_sso_user, is_anonymous,
+  confirmation_token, recovery_token, email_change,
+  email_change_token_new, email_change_token_current,
+  phone_change, phone_change_token, reauthentication_token
 ) values`);
 
   const authRows = coaches.map((c) => {
@@ -196,9 +213,10 @@ insert into auth.users (
       org_name: null,
     });
     return `  ('00000000-0000-0000-0000-000000000000', ${lit(c.id)}, 'authenticated', 'authenticated',
-   ${lit(c.email)}, extensions.crypt(${lit(SEED_PASSWORD)}, extensions.gen_salt('bf')),
+   ${lit(c.email)}, extensions.crypt(${lit(SEED_PASSWORD)}, extensions.gen_salt('bf', 10)),
    now(), now(), now(),
-   '{"provider":"email","providers":["email"]}'::jsonb, ${lit(meta)}::jsonb, false, false)`;
+   '{"provider":"email","providers":["email"]}'::jsonb, ${lit(meta)}::jsonb, false, false,
+   '', '', '', '', '', '', '', '')`;
   });
   parts.push(authRows.join(",\n") + "\non conflict (id) do nothing;\n");
 
@@ -340,6 +358,70 @@ function chunk(lines: string[], size: number): string[] {
   return out;
 }
 
+/**
+ * Splits the seed into files small enough for the SQL Editor to accept.
+ *
+ * Generated rather than split by hand, which is how the previous parts drifted
+ * out of sync with this script: the single-file `02_seed.sql` was regenerated
+ * while `02a`–`02g` kept whatever they were cut from, so the files someone
+ * actually pastes into Supabase were stale. Anything the running app depends on
+ * has to come out of the generator.
+ *
+ * Each part is a complete transaction. Splitting happens only at statement
+ * boundaries — a line whose last character is `;` — so no part can end
+ * mid-statement. Safe here because the seed contains no dollar-quoted bodies,
+ * which is asserted rather than assumed.
+ */
+function splitSeed(seed: string, maxBytes = 120_000): string[] {
+  if (seed.includes("$$")) {
+    throw new Error(
+      "Seed contains a dollar-quoted block; splitting on ';' is no longer safe.",
+    );
+  }
+
+  const BEGIN = "\nbegin;\n";
+  const beginAt = seed.indexOf(BEGIN);
+  const commitAt = seed.lastIndexOf("\ncommit;");
+  if (beginAt === -1 || commitAt === -1) {
+    throw new Error("Seed is not wrapped in a single begin/commit.");
+  }
+
+  const preamble = seed.slice(0, beginAt);
+  const body = seed.slice(beginAt + BEGIN.length, commitAt);
+
+  const statements: string[] = [];
+  let current: string[] = [];
+  for (const line of body.split("\n")) {
+    current.push(line);
+    if (line.trimEnd().endsWith(";")) {
+      statements.push(current.join("\n"));
+      current = [];
+    }
+  }
+  if (current.join("").trim()) statements.push(current.join("\n"));
+
+  const groups: string[][] = [];
+  let group: string[] = [];
+  let size = 0;
+  for (const statement of statements) {
+    if (size > 0 && size + statement.length > maxBytes) {
+      groups.push(group);
+      group = [];
+      size = 0;
+    }
+    group.push(statement);
+    size += statement.length;
+  }
+  if (group.length) groups.push(group);
+
+  return groups.map(
+    (g, i) =>
+      `-- HEME seed — part ${i + 1} of ${groups.length}. Run the parts in order.\n` +
+      (i === 0 ? `${preamble}\n` : "\n") +
+      `begin;\n${g.join("\n")}\ncommit;\n`,
+  );
+}
+
 async function columnsOf(sql: postgres.Sql, table: string): Promise<string[]> {
   const rows = await sql<{ column_name: string }[]>`
     select column_name
@@ -373,6 +455,24 @@ async function main() {
     const seed = await buildSeed(sql);
     await writeFile(path.join(OUT_DIR, "02_seed.sql"), seed);
     console.log(`  · 02_seed.sql    ${(seed.length / 1024).toFixed(0)} KB`);
+
+    // Clear previous parts first: a smaller seed produces fewer files, and a
+    // leftover part from an older run would be applied as though current.
+    for (const stale of await readdir(OUT_DIR)) {
+      if (/^02[a-z]_seed\.sql$/.test(stale)) {
+        await rm(path.join(OUT_DIR, stale));
+      }
+    }
+
+    const parts = splitSeed(seed);
+    if (parts.length > 26) {
+      throw new Error(`${parts.length} parts exceeds the a–z naming scheme.`);
+    }
+    for (const [i, part] of parts.entries()) {
+      const name = `02${String.fromCharCode(97 + i)}_seed.sql`;
+      await writeFile(path.join(OUT_DIR, name), part);
+      console.log(`  · ${name}   ${(part.length / 1024).toFixed(0)} KB`);
+    }
   } finally {
     await sql.end();
   }

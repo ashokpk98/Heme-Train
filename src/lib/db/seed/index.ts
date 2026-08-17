@@ -181,12 +181,23 @@ async function createAuthUser(spec: SeedCoach): Promise<string> {
 
   // Local fallback. The password is not usable for sign-in without GoTrue
   // running, but everything about authorisation can still be exercised.
+  //
+  // The empty strings matter even though nothing local reads them: GoTrue maps
+  // these columns to a Go string and cannot scan NULL out of them, so a row
+  // seeded this way and later pointed at a real Supabase project would fail
+  // every sign-in with HTTP 500. Writing '' keeps the local fixture the same
+  // shape as one Supabase would have created.
   const [row] = await db.execute<{ id: string }>(sql`
-    insert into auth.users (email, raw_user_meta_data)
+    insert into auth.users (
+      email, raw_user_meta_data,
+      confirmation_token, recovery_token, email_change,
+      email_change_token_new, email_change_token_current,
+      phone_change, phone_change_token, reauthentication_token
+    )
     values (${spec.email}, ${JSON.stringify({
       name: spec.name,
       org_name: spec.orgName,
-    })}::jsonb)
+    })}::jsonb, '', '', '', '', '', '', '', '')
     returning id
   `);
   return row.id;

@@ -50,7 +50,34 @@ select
 
   -- And the app needs a profile row, or sign-in succeeds and every page fails.
   exists (select 1 from public.users p where p.id = u.id)
-                                                  as has_profile
+                                                  as has_profile,
+
+  /*
+   * The check every other column here will happily pass while sign-in fails.
+   *
+   * GoTrue maps each of these columns to a Go string, which cannot hold NULL,
+   * while Supabase declares them nullable with no default. A row inserted by
+   * hand that omits them stores NULL, and then any query touching that user
+   * crashes the auth service instead of rejecting the login:
+   *
+   *   sql: Scan error on column index 3, name "confirmation_token":
+   *   converting NULL to string is unsupported
+   *
+   * That arrives as HTTP 500, which the login form reports with the same
+   * "Email or password is incorrect." as everything else. Nothing is wrong with
+   * the data — the reader cannot represent it — so this is invisible to every
+   * other check in this file. It was the actual fault the first time this
+   * diagnostic ran green.
+   *
+   * Read through jsonb so a column missing on this Supabase revision is simply
+   * absent rather than an error.
+   */
+  (select count(*)
+     from jsonb_each(to_jsonb(u)) as kv(k, v)
+    where k in ('confirmation_token', 'recovery_token', 'email_change',
+                'email_change_token_new', 'email_change_token_current',
+                'phone_change', 'phone_change_token', 'reauthentication_token')
+      and v = 'null'::jsonb) = 0            as no_null_tokens
 
 from auth.users u
 where u.email like '%@heme.test'
@@ -68,7 +95,12 @@ order by u.email;
  *                                Same repair.
  *   has_email_identity = false   Same repair.
  *   has_profile = false          auth works but the app has no coach record;
- *                                re-run 02b_seed.sql.
- *   all green                    the credentials are fine and the problem is
- *                                the app's key or URL — check /api/health.
+ *                                re-run the later seed parts.
+ *   no_null_tokens = false       sign-in returns HTTP 500 and the auth service
+ *                                is crashing, not rejecting the password. Run
+ *                                repair-seed-logins.sql.
+ *   all green                    the credentials are fine. Run
+ *                                `npm run auth:doctor`, which asks the auth
+ *                                service directly and prints the status and
+ *                                error code this form is designed to hide.
  */

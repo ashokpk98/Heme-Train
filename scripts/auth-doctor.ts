@@ -81,6 +81,21 @@ function describeAttempt(a: Attempt): string {
 /** Maps the auth service's own error code to what to do about it. */
 function interpret(a: Attempt): string | null {
   if (a.ok) return null;
+
+  // A 500 is the auth service crashing, not rejecting a password, and there is
+  // one overwhelmingly likely cause: a NULL in a column GoTrue reads as a Go
+  // string. Worth naming explicitly, because the row looks perfect in SQL and
+  // the Admin API is broken by the same fault, so phase 2 cannot repair it.
+  if (a.status === 500 || /database error/i.test(a.message ?? "")) {
+    return (
+      "The auth service is crashing, not rejecting the password. Almost " +
+      "certainly a NULL in one of auth.users' token columns — GoTrue maps them " +
+      "to a Go string, which cannot hold NULL. Fix it with " +
+      "supabase/repair-seed-logins.sql, then re-run this. Phase 2 cannot help: " +
+      "the Admin API reads the same columns and fails the same way."
+    );
+  }
+
   switch (a.code) {
     case "invalid_credentials":
       return "The auth service rejected the password even though the stored hash verifies in SQL. This is the case phase 2 fixes.";
@@ -175,9 +190,18 @@ async function main() {
     });
     if (error) {
       console.error("Could not list users:", error.message);
-      console.error(
-        "A 401 here means the service_role key is wrong or was rotated.",
-      );
+      if (/database error/i.test(error.message)) {
+        console.error(
+          "\nThis is the NULL token column fault again, seen from the Admin API:\n" +
+            "listing users scans the same columns that break sign-in, so this\n" +
+            "path cannot repair it. Run supabase/repair-seed-logins.sql in the\n" +
+            "SQL Editor first, then re-run this script.",
+        );
+      } else {
+        console.error(
+          "A 401 here means the service_role key is wrong or was rotated.",
+        );
+      }
       process.exit(1);
     }
     for (const u of data.users) if (u.email) byEmail.set(u.email, u.id);

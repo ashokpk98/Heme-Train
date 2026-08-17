@@ -189,10 +189,37 @@ route before the app carries real client data.
 
 ### Seeded logins refusing to sign in
 
+If the seeded accounts are refused while a self-registered one works, this is
+almost certainly the cause, and it is worth understanding because nothing about
+it looks like a password problem.
+
+**A NULL in a token column crashes the auth service.** GoTrue maps
+`confirmation_token`, `recovery_token`, `email_change`, `email_change_token_new`,
+`email_change_token_current`, `phone_change`, `phone_change_token` and
+`reauthentication_token` to a Go `string`, which cannot hold NULL. Supabase
+declares all eight nullable with no default. So a row inserted by hand that
+omits them stores NULL, and every subsequent read of that user fails:
+
+```
+error finding user: sql: Scan error on column index 3, name "confirmation_token":
+converting NULL to string is unsupported
+```
+
+The browser gets HTTP 500 — the service is *crashing*, not rejecting the
+password. Three things make this hard to see. The row looks flawless in SQL: the
+bcrypt hash verifies, the email is confirmed, the identity row exists, because
+nothing is wrong with the data and the fault is in the reader. The login form
+reports it identically to a wrong password. And it disables the Admin API too,
+so resetting the password through Supabase fails with `Database error finding
+users` — the usual escape hatch is closed by the same bug.
+
+The generator now writes `''` into all eight columns, so a fresh install cannot
+hit this. An existing project is repaired by `repair-seed-logins.sql`.
+
 The login form reports `Email or password is incorrect.` for *every* failure,
 deliberately — distinguishing "no such user" from "wrong password" is an
 account-enumeration oracle. That is right for the form and useless for
-debugging, so two SQL files answer it instead:
+debugging, so these three answer it instead:
 
 | File | What it does |
 |---|---|
