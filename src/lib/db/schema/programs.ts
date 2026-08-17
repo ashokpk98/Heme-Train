@@ -1,4 +1,4 @@
-import { relations } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
 import {
   boolean,
   doublePrecision,
@@ -33,6 +33,15 @@ export const programs = pgTable(
     orgId: uuid("org_id")
       .notNull()
       .references(() => organizations.id, { onDelete: "cascade" }),
+    /**
+     * Owning coach. Programs are a coach's own work by default; RLS hides them
+     * from colleagues unless `isOrgShared` is set.
+     */
+    ownerCoachId: uuid("owner_coach_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    /** Share this program org-wide — intended for reusable templates. */
+    isOrgShared: boolean("is_org_shared").notNull().default(false),
     name: text("name").notNull(),
     description: text("description"),
     goal: text("goal"),
@@ -53,7 +62,10 @@ export const programs = pgTable(
       .notNull()
       .defaultNow(),
   },
-  (t) => [index("programs_org_idx").on(t.orgId)],
+  (t) => [
+    index("programs_org_idx").on(t.orgId),
+    index("programs_owner_idx").on(t.orgId, t.ownerCoachId),
+  ],
 );
 
 /* ------------------------------------------------------------------ *
@@ -64,6 +76,13 @@ export const programBlocks = pgTable(
   "program_blocks",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    /** Denormalised by trigger — see supabase/migrations. */
+    orgId: uuid("org_id")
+      .notNull()
+      // DEFAULT NULL keeps this optional for Drizzle inserts; the BEFORE INSERT
+      // trigger fills it before the NOT NULL check runs.
+      .default(sql`null`)
+      .references(() => organizations.id, { onDelete: "cascade" }),
     programId: uuid("program_id")
       .notNull()
       .references(() => programs.id, { onDelete: "cascade" }),
@@ -76,7 +95,10 @@ export const programBlocks = pgTable(
     intensityEmphasis: integer("intensity_emphasis").notNull().default(3),
     notes: text("notes"),
   },
-  (t) => [index("program_blocks_program_idx").on(t.programId)],
+  (t) => [
+    index("program_blocks_program_idx").on(t.programId),
+    index("program_blocks_rls_idx").on(t.orgId, t.programId),
+  ],
 );
 
 /* ------------------------------------------------------------------ *
@@ -87,6 +109,21 @@ export const microcycles = pgTable(
   "microcycles",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    /** Denormalised by trigger — see supabase/migrations. */
+    orgId: uuid("org_id")
+      .notNull()
+      // DEFAULT NULL keeps this optional for Drizzle inserts; the BEFORE INSERT
+      // trigger fills it before the NOT NULL check runs.
+      .default(sql`null`)
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    /**
+     * Denormalised by trigger. Without it this table sits 3 hops from
+     * `organizations` and every RLS check would walk that whole chain per row.
+     */
+    programId: uuid("program_id")
+      .notNull()
+      .default(sql`null`)
+      .references(() => programs.id, { onDelete: "cascade" }),
     blockId: uuid("block_id")
       .notNull()
       .references(() => programBlocks.id, { onDelete: "cascade" }),
@@ -95,7 +132,10 @@ export const microcycles = pgTable(
     loadType: microcycleLoadTypeEnum("load_type").notNull().default("load"),
     notes: text("notes"),
   },
-  (t) => [index("microcycles_block_idx").on(t.blockId)],
+  (t) => [
+    index("microcycles_block_idx").on(t.blockId),
+    index("microcycles_rls_idx").on(t.orgId, t.programId),
+  ],
 );
 
 /* ------------------------------------------------------------------ *
@@ -106,6 +146,21 @@ export const sessions = pgTable(
   "sessions",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    /** Denormalised by trigger — see supabase/migrations. */
+    orgId: uuid("org_id")
+      .notNull()
+      // DEFAULT NULL keeps this optional for Drizzle inserts; the BEFORE INSERT
+      // trigger fills it before the NOT NULL check runs.
+      .default(sql`null`)
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    /**
+     * Denormalised by trigger. Without it this table sits 4 hops from
+     * `organizations` and every RLS check would walk that whole chain per row.
+     */
+    programId: uuid("program_id")
+      .notNull()
+      .default(sql`null`)
+      .references(() => programs.id, { onDelete: "cascade" }),
     microcycleId: uuid("microcycle_id")
       .notNull()
       .references(() => microcycles.id, { onDelete: "cascade" }),
@@ -116,7 +171,10 @@ export const sessions = pgTable(
     estimatedDurationMin: integer("estimated_duration_min"),
     notes: text("notes"),
   },
-  (t) => [index("sessions_microcycle_idx").on(t.microcycleId)],
+  (t) => [
+    index("sessions_microcycle_idx").on(t.microcycleId),
+    index("sessions_rls_idx").on(t.orgId, t.programId),
+  ],
 );
 
 /* ------------------------------------------------------------------ *
@@ -127,6 +185,21 @@ export const sessionBlocks = pgTable(
   "session_blocks",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    /** Denormalised by trigger — see supabase/migrations. */
+    orgId: uuid("org_id")
+      .notNull()
+      // DEFAULT NULL keeps this optional for Drizzle inserts; the BEFORE INSERT
+      // trigger fills it before the NOT NULL check runs.
+      .default(sql`null`)
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    /**
+     * Denormalised by trigger. Without it this table sits 5 hops from
+     * `organizations` and every RLS check would walk that whole chain per row.
+     */
+    programId: uuid("program_id")
+      .notNull()
+      .default(sql`null`)
+      .references(() => programs.id, { onDelete: "cascade" }),
     sessionId: uuid("session_id")
       .notNull()
       .references(() => sessions.id, { onDelete: "cascade" }),
@@ -146,7 +219,10 @@ export const sessionBlocks = pgTable(
     workIntervalSec: integer("work_interval_sec"),
     notes: text("notes"),
   },
-  (t) => [index("session_blocks_session_idx").on(t.sessionId)],
+  (t) => [
+    index("session_blocks_session_idx").on(t.sessionId),
+    index("session_blocks_rls_idx").on(t.orgId, t.programId),
+  ],
 );
 
 /* ------------------------------------------------------------------ *
@@ -157,6 +233,21 @@ export const exerciseSlots = pgTable(
   "exercise_slots",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    /** Denormalised by trigger — see supabase/migrations. */
+    orgId: uuid("org_id")
+      .notNull()
+      // DEFAULT NULL keeps this optional for Drizzle inserts; the BEFORE INSERT
+      // trigger fills it before the NOT NULL check runs.
+      .default(sql`null`)
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    /**
+     * Denormalised by trigger. Without it this table sits 6 hops from
+     * `organizations` and every RLS check would walk that whole chain per row.
+     */
+    programId: uuid("program_id")
+      .notNull()
+      .default(sql`null`)
+      .references(() => programs.id, { onDelete: "cascade" }),
     sessionBlockId: uuid("session_block_id")
       .notNull()
       .references(() => sessionBlocks.id, { onDelete: "cascade" }),
@@ -174,6 +265,7 @@ export const exerciseSlots = pgTable(
   (t) => [
     index("exercise_slots_block_idx").on(t.sessionBlockId),
     index("exercise_slots_exercise_idx").on(t.exerciseId),
+    index("exercise_slots_rls_idx").on(t.orgId, t.programId),
   ],
 );
 
@@ -185,6 +277,21 @@ export const prescribedSets = pgTable(
   "prescribed_sets",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    /** Denormalised by trigger — see supabase/migrations. */
+    orgId: uuid("org_id")
+      .notNull()
+      // DEFAULT NULL keeps this optional for Drizzle inserts; the BEFORE INSERT
+      // trigger fills it before the NOT NULL check runs.
+      .default(sql`null`)
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    /**
+     * Denormalised by trigger. Without it this table sits 7 hops from
+     * `organizations` and every RLS check would walk that whole chain per row.
+     */
+    programId: uuid("program_id")
+      .notNull()
+      .default(sql`null`)
+      .references(() => programs.id, { onDelete: "cascade" }),
     slotId: uuid("slot_id")
       .notNull()
       .references(() => exerciseSlots.id, { onDelete: "cascade" }),
@@ -228,7 +335,10 @@ export const prescribedSets = pgTable(
 
     notes: text("notes"),
   },
-  (t) => [index("prescribed_sets_slot_idx").on(t.slotId)],
+  (t) => [
+    index("prescribed_sets_slot_idx").on(t.slotId),
+    index("prescribed_sets_rls_idx").on(t.orgId, t.programId),
+  ],
 );
 
 /* ------------------------------- relations ------------------------------ */

@@ -1,26 +1,26 @@
-import { and, asc, desc, eq } from "drizzle-orm";
-import { db } from "@/lib/db";
-import {
-  athleteMaxes,
-  athletes,
-  programs,
-} from "@/lib/db/schema";
+import { asc, desc, eq } from "drizzle-orm";
+import type { ScopedDb } from "@/lib/db";
+import { athleteMaxes, athletes, programs } from "@/lib/db/schema";
 import type { AthleteMaxEntry } from "@/lib/domain/prescription";
 
-export async function listPrograms(orgId: string) {
-  return db
+/*
+ * Every function here takes the RLS-scoped transaction from `withCoach`.
+ * None of them filter by org or coach: the policies do that, so the rule lives
+ * in exactly one place. A missing `where` returns nothing, not another coach's
+ * data.
+ */
+
+export async function listPrograms(tx: ScopedDb) {
+  return tx
     .select()
     .from(programs)
-    .where(and(eq(programs.orgId, orgId), eq(programs.isArchived, false)))
+    .where(eq(programs.isArchived, false))
     .orderBy(desc(programs.isTemplate), asc(programs.name));
 }
 
-/**
- * The whole program tree in one round trip.
- * Ordering is applied at every level so the builder never has to sort.
- */
-export async function getProgramTree(programId: string) {
-  return db.query.programs.findFirst({
+/** The whole program tree in one round trip, ordered at every level. */
+export async function getProgramTree(tx: ScopedDb, programId: string) {
+  return tx.query.programs.findFirst({
     where: eq(programs.id, programId),
     with: {
       blocks: {
@@ -64,8 +64,9 @@ export type TreeSessionBlock = TreeSession["blocks"][number];
 export type TreeSlot = TreeSessionBlock["slots"][number];
 export type TreeSet = TreeSlot["sets"][number];
 
-export async function listAthletes(orgId: string) {
-  return db
+/** Only the athletes this coach owns — enforced by the `athletes_all` policy. */
+export async function listAthletes(tx: ScopedDb) {
+  return tx
     .select({
       id: athletes.id,
       firstName: athletes.firstName,
@@ -74,7 +75,6 @@ export async function listAthletes(orgId: string) {
       sport: athletes.sport,
     })
     .from(athletes)
-    .where(eq(athletes.orgId, orgId))
     .orderBy(asc(athletes.firstName));
 }
 
@@ -82,11 +82,16 @@ export async function listAthletes(orgId: string) {
  * Current max per exercise for one athlete, keyed by exercise id — the shape
  * `resolveSet` expects. Maxes are append-only, so the newest `testedAt` per
  * exercise wins.
+ *
+ * Returns empty for an athlete this coach does not own: RLS filters the rows
+ * rather than raising, so a crafted id yields no data instead of an error that
+ * would confirm the athlete exists.
  */
 export async function getAthleteMaxes(
+  tx: ScopedDb,
   athleteId: string,
 ): Promise<Record<string, AthleteMaxEntry>> {
-  const rows = await db
+  const rows = await tx
     .select()
     .from(athleteMaxes)
     .where(eq(athleteMaxes.athleteId, athleteId))

@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import { ProgramBuilder } from "@/components/builder/ProgramBuilder";
+import { withCoach } from "@/lib/auth/session";
 import { listExercises } from "@/lib/db/queries/exercises";
-import { getDemoOrg } from "@/lib/db/queries/org";
 import {
   getAthleteMaxes,
   getProgramTree,
@@ -18,31 +18,41 @@ export default async function BuilderPage({
 }) {
   const { id } = await params;
 
-  const org = await getDemoOrg();
-  if (!org) notFound();
+  const data = await withCoach(async (tx, coach) => {
+    // RLS decides this: a program belonging to another coach simply isn't found.
+    const tree = await getProgramTree(tx, id);
+    if (!tree) return null;
 
-  const [tree, exercises, athletes] = await Promise.all([
-    getProgramTree(id),
-    listExercises(org.id),
-    listAthletes(org.id),
-  ]);
+    const [exercises, athletes] = await Promise.all([
+      listExercises(tx),
+      listAthletes(tx),
+    ]);
 
-  if (!tree) notFound();
+    // Maxes for every athlete this coach owns, so switching the preview target
+    // is instant. Sequential because they share one transaction.
+    const maxesByAthlete: Record<string, Record<string, AthleteMaxEntry>> = {};
+    for (const a of athletes) {
+      maxesByAthlete[a.id] = await getAthleteMaxes(tx, a.id);
+    }
 
-  // Maxes for every athlete, so switching the preview target is instant.
-  const maxEntries = await Promise.all(
-    athletes.map(async (a) => [a.id, await getAthleteMaxes(a.id)] as const),
-  );
-  const maxesByAthlete: Record<string, Record<string, AthleteMaxEntry>> =
-    Object.fromEntries(maxEntries);
+    return {
+      tree,
+      exercises,
+      athletes,
+      maxesByAthlete,
+      plateIncrementKg: coach.plateIncrementKg,
+    };
+  });
+
+  if (!data) notFound();
 
   return (
     <ProgramBuilder
-      tree={tree}
-      exercises={exercises}
-      athletes={athletes}
-      maxesByAthlete={maxesByAthlete}
-      plateIncrementKg={org.plateIncrementKg}
+      tree={data.tree}
+      exercises={data.exercises}
+      athletes={data.athletes}
+      maxesByAthlete={data.maxesByAthlete}
+      plateIncrementKg={data.plateIncrementKg}
     />
   );
 }

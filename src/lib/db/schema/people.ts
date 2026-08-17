@@ -1,4 +1,4 @@
-import { relations } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
 import {
   date,
   doublePrecision,
@@ -9,6 +9,7 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
+import { authUsers } from "./auth";
 import {
   athleteStatusEnum,
   groupTypeEnum,
@@ -29,10 +30,20 @@ export const organizations = pgTable("organizations", {
     .defaultNow(),
 });
 
+/**
+ * A coach's profile. `id` is the same UUID as the Supabase `auth.users` row —
+ * not an independent key — so the identity and the profile can never drift, and
+ * deleting the auth user removes the profile.
+ *
+ * Rows are created by the `handle_new_user()` trigger on signup, never by the
+ * application.
+ */
 export const users = pgTable(
   "users",
   {
-    id: uuid("id").primaryKey().defaultRandom(),
+    id: uuid("id")
+      .primaryKey()
+      .references(() => authUsers.id, { onDelete: "cascade" }),
     orgId: uuid("org_id")
       .notNull()
       .references(() => organizations.id, { onDelete: "cascade" }),
@@ -43,7 +54,10 @@ export const users = pgTable(
       .notNull()
       .defaultNow(),
   },
-  (t) => [uniqueIndex("users_org_email_idx").on(t.orgId, t.email)],
+  (t) => [
+    uniqueIndex("users_org_email_idx").on(t.orgId, t.email),
+    index("users_org_idx").on(t.orgId),
+  ],
 );
 
 export const athletes = pgTable(
@@ -53,6 +67,17 @@ export const athletes = pgTable(
     orgId: uuid("org_id")
       .notNull()
       .references(() => organizations.id, { onDelete: "cascade" }),
+    /**
+     * The coach who owns this athlete. This is what "their own athletes" means:
+     * RLS lets a coach see only rows where this matches their user id, even for
+     * colleagues inside the same organisation.
+     *
+     * Restricted on delete so a coach account cannot be removed while it still
+     * owns athletes — reassign them first.
+     */
+    ownerCoachId: uuid("owner_coach_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
     /** Set once the athlete has their own login; null for coach-managed athletes. */
     userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
     firstName: text("first_name").notNull(),
@@ -70,7 +95,11 @@ export const athletes = pgTable(
       .notNull()
       .defaultNow(),
   },
-  (t) => [index("athletes_org_idx").on(t.orgId)],
+  (t) => [
+    index("athletes_org_idx").on(t.orgId),
+    // Matches the RLS predicate (org_id, owner_coach_id) exactly.
+    index("athletes_owner_idx").on(t.orgId, t.ownerCoachId),
+  ],
 );
 
 export const groups = pgTable(
@@ -80,6 +109,10 @@ export const groups = pgTable(
     orgId: uuid("org_id")
       .notNull()
       .references(() => organizations.id, { onDelete: "cascade" }),
+    /** Owning coach — same isolation rule as athletes. */
+    ownerCoachId: uuid("owner_coach_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
     name: text("name").notNull(),
     type: groupTypeEnum("type").notNull().default("team"),
     sport: text("sport"),
@@ -88,7 +121,10 @@ export const groups = pgTable(
       .notNull()
       .defaultNow(),
   },
-  (t) => [index("groups_org_idx").on(t.orgId)],
+  (t) => [
+    index("groups_org_idx").on(t.orgId),
+    index("groups_owner_idx").on(t.orgId, t.ownerCoachId),
+  ],
 );
 
 /** Roster history: `leftAt` is null while the athlete is currently in the group. */
@@ -96,6 +132,11 @@ export const groupMembers = pgTable(
   "group_members",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    /** Denormalised from the parent group by trigger; the RLS org gate. */
+    orgId: uuid("org_id")
+      .notNull()
+      .default(sql`null`)
+      .references(() => organizations.id, { onDelete: "cascade" }),
     groupId: uuid("group_id")
       .notNull()
       .references(() => groups.id, { onDelete: "cascade" }),

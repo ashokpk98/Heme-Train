@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { requireCoach } from "@/lib/auth/session";
+import { signOut } from "@/app/(auth)/actions";
 
 const NAV = [
   { href: "/programs", label: "Programs" },
@@ -6,11 +8,20 @@ const NAV = [
   { href: "/athletes", label: "Athletes" },
 ];
 
-export default function CoachLayout({
+export default async function CoachLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  const coach = await requireCoach();
+  const initials = coach.name
+    .split(/\s+/)
+    .map((p) => p[0])
+    .filter(Boolean)
+    .slice(0, 2)
+    .join("")
+    .toUpperCase();
+
   return (
     <div className="flex min-h-screen flex-col">
       <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center gap-6 border-b border-border bg-surface px-5">
@@ -33,11 +44,22 @@ export default function CoachLayout({
           ))}
         </nav>
 
-        <div className="ml-auto flex items-center gap-3 text-xs text-text-faint">
-          <span>HEME Performance</span>
+        <div className="ml-auto flex items-center gap-3 text-xs">
+          <div className="text-right leading-tight">
+            <p className="text-[12px] text-text">{coach.name}</p>
+            <p className="text-[10px] text-text-faint">{coach.orgName}</p>
+          </div>
           <span className="grid size-7 place-items-center rounded-full bg-surface-3 text-[11px] font-medium text-text-muted">
-            HC
+            {initials}
           </span>
+          <form action={signOut}>
+            <button
+              type="submit"
+              className="rounded border border-border px-2 py-1 text-[11px] text-text-muted hover:border-accent hover:text-accent"
+            >
+              Sign out
+            </button>
+          </form>
         </div>
       </header>
 

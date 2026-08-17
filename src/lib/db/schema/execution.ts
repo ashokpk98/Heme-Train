@@ -1,4 +1,4 @@
-import { relations } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
 import {
   boolean,
   date,
@@ -11,7 +11,7 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 import { exercises } from "./exercises";
-import { athletes, groups } from "./people";
+import { athletes, groups, organizations } from "./people";
 import { prescribedSets, programs, sessions } from "./programs";
 import {
   assignmentStatusEnum,
@@ -27,6 +27,13 @@ export const programAssignments = pgTable(
   "program_assignments",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    /** Denormalised by trigger — the join-free RLS org gate. */
+    orgId: uuid("org_id")
+      .notNull()
+      // DEFAULT NULL keeps this optional for Drizzle inserts; the BEFORE INSERT
+      // trigger fills it before the NOT NULL check runs.
+      .default(sql`null`)
+      .references(() => organizations.id, { onDelete: "cascade" }),
     programId: uuid("program_id")
       .notNull()
       .references(() => programs.id, { onDelete: "cascade" }),
@@ -47,6 +54,7 @@ export const programAssignments = pgTable(
     index("assignments_program_idx").on(t.programId),
     index("assignments_athlete_idx").on(t.athleteId),
     index("assignments_group_idx").on(t.groupId),
+    index("assignments_rls_idx").on(t.orgId),
   ],
 );
 
@@ -59,6 +67,13 @@ export const athleteMaxes = pgTable(
   "athlete_maxes",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    /** Denormalised by trigger — the join-free RLS org gate. */
+    orgId: uuid("org_id")
+      .notNull()
+      // DEFAULT NULL keeps this optional for Drizzle inserts; the BEFORE INSERT
+      // trigger fills it before the NOT NULL check runs.
+      .default(sql`null`)
+      .references(() => organizations.id, { onDelete: "cascade" }),
     athleteId: uuid("athlete_id")
       .notNull()
       .references(() => athletes.id, { onDelete: "cascade" }),
@@ -81,6 +96,7 @@ export const athleteMaxes = pgTable(
   (t) => [
     index("athlete_maxes_athlete_idx").on(t.athleteId),
     index("athlete_maxes_lookup_idx").on(t.athleteId, t.exerciseId, t.testedAt),
+    index("athlete_maxes_rls_idx").on(t.orgId, t.athleteId),
   ],
 );
 
@@ -88,6 +104,13 @@ export const loggedSessions = pgTable(
   "logged_sessions",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    /** Denormalised by trigger — the join-free RLS org gate. */
+    orgId: uuid("org_id")
+      .notNull()
+      // DEFAULT NULL keeps this optional for Drizzle inserts; the BEFORE INSERT
+      // trigger fills it before the NOT NULL check runs.
+      .default(sql`null`)
+      .references(() => organizations.id, { onDelete: "cascade" }),
     assignmentId: uuid("assignment_id").references(
       () => programAssignments.id,
       { onDelete: "set null" },
@@ -110,6 +133,7 @@ export const loggedSessions = pgTable(
   (t) => [
     index("logged_sessions_athlete_idx").on(t.athleteId),
     index("logged_sessions_date_idx").on(t.date),
+    index("logged_sessions_rls_idx").on(t.orgId, t.athleteId),
   ],
 );
 
@@ -121,6 +145,21 @@ export const loggedSets = pgTable(
   "logged_sets",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    /** Denormalised by trigger — the join-free RLS org gate. */
+    orgId: uuid("org_id")
+      .notNull()
+      // DEFAULT NULL keeps this optional for Drizzle inserts; the BEFORE INSERT
+      // trigger fills it before the NOT NULL check runs.
+      .default(sql`null`)
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    /**
+     * Denormalised by trigger from the parent logged session, so the coach
+     * gate is one join to `athletes` rather than walking the session chain.
+     */
+    athleteId: uuid("athlete_id")
+      .notNull()
+      .default(sql`null`)
+      .references(() => athletes.id, { onDelete: "cascade" }),
     loggedSessionId: uuid("logged_session_id")
       .notNull()
       .references(() => loggedSessions.id, { onDelete: "cascade" }),
@@ -152,6 +191,7 @@ export const loggedSets = pgTable(
     index("logged_sets_session_idx").on(t.loggedSessionId),
     index("logged_sets_exercise_idx").on(t.exerciseId),
     index("logged_sets_prescribed_idx").on(t.prescribedSetId),
+    index("logged_sets_rls_idx").on(t.orgId, t.athleteId),
   ],
 );
 

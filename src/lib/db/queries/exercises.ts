@@ -1,5 +1,5 @@
-import { asc, eq, isNull, or } from "drizzle-orm";
-import { db } from "@/lib/db";
+import { asc } from "drizzle-orm";
+import type { ScopedDb } from "@/lib/db";
 import { exercises } from "@/lib/db/schema";
 
 export interface LibraryExercise {
@@ -31,18 +31,13 @@ export interface LibraryExercise {
 
 /**
  * The global library plus this org's custom exercises.
- * Global rows carry `org_id IS NULL`, so both come back in one pass.
+ *
+ * No org filter here on purpose: the `exercises_select` policy already returns
+ * `org_id is null or org_id = current_org_id()`. Filtering again in SQL would
+ * duplicate the rule in two places that could drift apart.
  */
-export async function listExercises(orgId?: string): Promise<LibraryExercise[]> {
-  const rows = await db
-    .select()
-    .from(exercises)
-    .where(
-      orgId
-        ? or(isNull(exercises.orgId), eq(exercises.orgId, orgId))
-        : isNull(exercises.orgId),
-    )
-    .orderBy(asc(exercises.name));
+export async function listExercises(tx: ScopedDb): Promise<LibraryExercise[]> {
+  const rows = await tx.select().from(exercises).orderBy(asc(exercises.name));
 
   return rows
     .filter((r) => !r.isArchived)

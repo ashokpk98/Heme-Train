@@ -1,8 +1,14 @@
 /**
- * Seed script: global exercise library, a demo org, and the starter templates.
+ * Seed script: global exercise library, coaches with auth identities, and the
+ * starter program templates.
  *
- * Idempotent — it clears the tables it owns before inserting, so `npm run
- * db:seed` can be run repeatedly during development.
+ * Works against both a local Postgres and a real Supabase project. With
+ * SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY set, auth users are created through
+ * the Admin API so passwords are properly hashed and sign-in works. Without
+ * them it falls back to inserting into `auth.users` directly, which is enough
+ * to develop and test authorisation locally.
+ *
+ * Idempotent — clears the tables it owns first.
  *
  * Run with: npm run db:seed
  */
@@ -16,12 +22,9 @@ import {
   exercises,
   groupMembers,
   groups,
-  loggedSessions,
-  loggedSets,
   microcycles,
   organizations,
   prescribedSets,
-  programAssignments,
   programBlocks,
   programs,
   sessionBlocks,
@@ -32,6 +35,7 @@ import { progressSet } from "@/lib/domain/progression";
 import { trainingMaxFrom } from "@/lib/domain/e1rm";
 import { EXERCISE_LIBRARY } from "./exercise-data";
 import { PROGRAM_TEMPLATES, type TemplateSet } from "./templates";
+import { SEED_COACHES, type SeedCoach } from "./coaches";
 
 export function slugify(name: string): string {
   return name
@@ -41,32 +45,47 @@ export function slugify(name: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
-/** Coach-facing slot label: block 0 slot 0 -> "A1", block 1 slot 2 -> "B3". */
 function letterLabel(blockIndex: number, slotIndex: number): string {
   return `${String.fromCharCode(65 + (blockIndex % 26))}${slotIndex + 1}`;
 }
 
+const SUPABASE_URL =
+  process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
+const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
+const useAdminApi = Boolean(SUPABASE_URL && SERVICE_ROLE_KEY);
+
+/* ------------------------------------------------------------------ *
+ * Reset
+ * ------------------------------------------------------------------ */
+
 async function clearAll() {
-  // CASCADE handles the FK ordering for us.
-  await db.execute(sql`
-    truncate table
-      ${loggedSets}, ${loggedSessions},
-      ${athleteMaxes}, ${programAssignments},
-      ${prescribedSets}, ${exerciseSlots}, ${sessionBlocks}, ${sessions},
-      ${microcycles}, ${programBlocks}, ${programs},
-      ${groupMembers}, ${groups}, ${athletes}, ${users},
-      ${exercises}, ${organizations}
-    restart identity cascade
-  `);
+  // Deleting the auth users cascades to public.users, which cascades onward.
+  // Organizations are cleared separately because they are created by the
+  // signup trigger, not owned by any single auth user.
+  if (useAdminApi) {
+    const { createClient } = await import("@supabase/supabase-js");
+    const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+    const { data } = await admin.auth.admin.listUsers({ perPage: 1000 });
+    for (const u of data?.users ?? []) {
+      if (u.email?.endsWith("@heme.test")) {
+        await admin.auth.admin.deleteUser(u.id);
+      }
+    }
+  } else {
+    await db.execute(sql`truncate auth.users cascade`);
+  }
+
+  await db.execute(sql`truncate table ${organizations} restart identity cascade`);
+  await db.execute(sql`truncate table ${exercises} restart identity cascade`);
 }
 
 /* ------------------------------------------------------------------ *
- * Exercise library
+ * Exercise library (global: org_id stays null)
  * ------------------------------------------------------------------ */
 
 async function seedExercises(): Promise<Map<string, string>> {
-  // Pass 1: insert every exercise without its self-references, since a row may
-  // point at another row that does not exist yet.
   const rows = EXERCISE_LIBRARY.map((e) => ({
     orgId: null,
     name: e.name,
@@ -98,7 +117,7 @@ async function seedExercises(): Promise<Map<string, string>> {
 
   const bySlug = new Map(inserted.map((r) => [r.slug, r.id]));
 
-  // Pass 2: wire up derivedFrom and progressionOf now that every id exists.
+  // Second pass wires the self-references now that every id exists.
   for (const e of EXERCISE_LIBRARY) {
     const id = bySlug.get(slugify(e.name));
     if (!id) continue;
@@ -107,7 +126,6 @@ async function seedExercises(): Promise<Map<string, string>> {
     const progressionOfId = e.progressionOf
       ? bySlug.get(e.progressionOf)
       : undefined;
-
     if (!derivedFromId && !progressionOfId) continue;
 
     if (e.derivedFrom && !derivedFromId) {
@@ -134,54 +152,102 @@ async function seedExercises(): Promise<Map<string, string>> {
 }
 
 /* ------------------------------------------------------------------ *
- * Demo organisation
+ * Coaches — identity first, then the org merge
  * ------------------------------------------------------------------ */
 
-const DEMO_ATHLETES = [
-  { firstName: "Priya", lastName: "Raman", sex: "female" as const, dob: "2001-04-12", height: 168, weight: 63, sport: "Athletics", position: "400m" },
-  { firstName: "Marcus", lastName: "Bell", sex: "male" as const, dob: "1999-09-02", height: 186, weight: 94, sport: "Rugby", position: "Flanker" },
-  { firstName: "Aisha", lastName: "Khan", sex: "female" as const, dob: "2003-01-25", height: 174, weight: 70, sport: "Netball", position: "Goal Attack" },
-  { firstName: "Tom", lastName: "Whitfield", sex: "male" as const, dob: "1997-06-18", height: 180, weight: 88, sport: "Rugby", position: "Scrum-half" },
-  { firstName: "Elena", lastName: "Duarte", sex: "female" as const, dob: "2000-11-30", height: 171, weight: 66, sport: "Football", position: "Midfielder" },
-  { firstName: "Sam", lastName: "Okafor", sex: "male" as const, dob: "1995-03-08", height: 178, weight: 82, sport: "General", position: null },
-];
+interface CreatedCoach {
+  spec: SeedCoach;
+  userId: string;
+  orgId: string;
+}
 
-/** Rough maxes per athlete, in kg, keyed by exercise slug. */
-const DEMO_MAXES: Record<string, Record<string, number>> = {
-  "Priya Raman": { "back-squat": 95, deadlift: 115, "bench-press": 52.5, "overhead-press": 35, "power-clean": 62.5 },
-  "Marcus Bell": { "back-squat": 180, deadlift: 220, "bench-press": 135, "overhead-press": 85, "power-clean": 115 },
-  "Aisha Khan": { "back-squat": 105, deadlift: 130, "bench-press": 55, "overhead-press": 37.5, "power-clean": 65 },
-  "Tom Whitfield": { "back-squat": 160, deadlift: 200, "bench-press": 120, "overhead-press": 75, "power-clean": 105 },
-  "Elena Duarte": { "back-squat": 110, deadlift: 135, "bench-press": 57.5, "overhead-press": 40, "power-clean": 70 },
-  "Sam Okafor": { "back-squat": 140, deadlift: 175, "bench-press": 100, "overhead-press": 62.5, "power-clean": 85 },
-};
+async function createAuthUser(spec: SeedCoach): Promise<string> {
+  if (useAdminApi) {
+    const { createClient } = await import("@supabase/supabase-js");
+    const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+    const { data, error } = await admin.auth.admin.createUser({
+      email: spec.email,
+      password: spec.password,
+      email_confirm: true,
+      user_metadata: { name: spec.name, org_name: spec.orgName },
+    });
+    if (error || !data.user) {
+      throw new Error(`Could not create ${spec.email}: ${error?.message}`);
+    }
+    return data.user.id;
+  }
 
-async function seedOrg(exerciseIds: Map<string, string>) {
-  const [org] = await db
-    .insert(organizations)
-    .values({
-      name: "HEME Performance",
-      slug: "heme-performance",
-      unitSystem: "kg",
-      plateIncrementKg: 2.5,
-    })
-    .returning();
+  // Local fallback. The password is not usable for sign-in without GoTrue
+  // running, but everything about authorisation can still be exercised.
+  const [row] = await db.execute<{ id: string }>(sql`
+    insert into auth.users (email, raw_user_meta_data)
+    values (${spec.email}, ${JSON.stringify({
+      name: spec.name,
+      org_name: spec.orgName,
+    })}::jsonb)
+    returning id
+  `);
+  return row.id;
+}
 
-  const [coach] = await db
-    .insert(users)
-    .values({
-      orgId: org.id,
-      email: "coach@heme.app",
-      name: "Head Coach",
-      role: "owner",
-    })
-    .returning();
+async function seedCoaches(): Promise<CreatedCoach[]> {
+  const created: CreatedCoach[] = [];
+  // orgKey -> the org id created by the first coach carrying that key.
+  const orgByKey = new Map<string, string>();
+
+  for (const spec of SEED_COACHES) {
+    // The `handle_new_user` trigger creates an organisation and profile.
+    const userId = await createAuthUser(spec);
+
+    const [profile] = await db
+      .select({ orgId: users.orgId })
+      .from(users)
+      .where(eq(users.id, userId));
+
+    if (!profile) {
+      throw new Error(
+        `handle_new_user() did not create a profile for ${spec.email}. ` +
+          `Has supabase/migrations/0001_tenancy_rls.sql been applied?`,
+      );
+    }
+
+    const existingOrgId = orgByKey.get(spec.orgKey);
+
+    if (existingOrgId) {
+      // This coach shares an organisation with an earlier one. Signup always
+      // mints a fresh org, so move them across and drop the empty one — this
+      // is what the invite flow will do properly later.
+      const ownOrgId = profile.orgId;
+      await db
+        .update(users)
+        .set({ orgId: existingOrgId })
+        .where(eq(users.id, userId));
+      await db.delete(organizations).where(eq(organizations.id, ownOrgId));
+      created.push({ spec, userId, orgId: existingOrgId });
+    } else {
+      orgByKey.set(spec.orgKey, profile.orgId);
+      created.push({ spec, userId, orgId: profile.orgId });
+    }
+  }
+
+  return created;
+}
+
+/* ------------------------------------------------------------------ *
+ * Athletes, groups, maxes — owned by a specific coach
+ * ------------------------------------------------------------------ */
+
+async function seedRoster(coach: CreatedCoach, exerciseIds: Map<string, string>) {
+  const today = new Date().toISOString().slice(0, 10);
 
   const athleteRows = await db
     .insert(athletes)
     .values(
-      DEMO_ATHLETES.map((a) => ({
-        orgId: org.id,
+      coach.spec.athletes.map((a) => ({
+        orgId: coach.orgId,
+        ownerCoachId: coach.userId,
         firstName: a.firstName,
         lastName: a.lastName,
         dateOfBirth: a.dob,
@@ -194,49 +260,40 @@ async function seedOrg(exerciseIds: Map<string, string>) {
     )
     .returning();
 
-  // A squad, plus an individual group — the 1:1 personal-training case.
-  const [squad, ptClient] = await db
-    .insert(groups)
-    .values([
-      {
-        orgId: org.id,
-        name: "Senior Squad",
-        type: "team" as const,
-        sport: "Rugby",
-        season: "2026 Pre-season",
-      },
-      {
-        orgId: org.id,
-        name: "Sam Okafor — 1:1",
-        type: "individual" as const,
-        sport: "General",
-      },
-    ])
-    .returning();
+  const byName = new Map(
+    athleteRows.map((a) => [`${a.firstName} ${a.lastName}`, a.id]),
+  );
 
-  const today = new Date().toISOString().slice(0, 10);
+  for (const g of coach.spec.groups) {
+    const [group] = await db
+      .insert(groups)
+      .values({
+        orgId: coach.orgId,
+        ownerCoachId: coach.userId,
+        name: g.name,
+        type: g.type,
+        sport: g.sport,
+      })
+      .returning();
 
-  await db.insert(groupMembers).values([
-    ...athleteRows
-      .filter((a) => a.lastName !== "Okafor")
-      .map((a) => ({ groupId: squad.id, athleteId: a.id, joinedAt: today })),
-    {
-      groupId: ptClient.id,
-      athleteId: athleteRows.find((a) => a.lastName === "Okafor")!.id,
-      joinedAt: today,
-    },
-  ]);
+    const members = g.members
+      .map((n) => byName.get(n))
+      .filter((id): id is string => Boolean(id))
+      .map((athleteId) => ({ groupId: group.id, athleteId, joinedAt: today }));
 
-  // Maxes — this is what makes %1RM prescriptions resolve to real weights.
-  const maxRows = athleteRows.flatMap((a) => {
-    const key = `${a.firstName} ${a.lastName}`;
-    const maxes = DEMO_MAXES[key] ?? {};
-    return Object.entries(maxes).flatMap(([slug, value]) => {
+    if (members.length) await db.insert(groupMembers).values(members);
+  }
+
+  // Maxes are what make %1RM prescriptions resolve to real weights.
+  const maxRows = coach.spec.athletes.flatMap((a) => {
+    const athleteId = byName.get(`${a.firstName} ${a.lastName}`);
+    if (!athleteId) return [];
+    return Object.entries(a.maxes).flatMap(([slug, value]) => {
       const exerciseId = exerciseIds.get(slug);
       if (!exerciseId) return [];
       return [
         {
-          athleteId: a.id,
+          athleteId,
           exerciseId,
           valueKg: value,
           trainingMaxKg: trainingMaxFrom(value),
@@ -249,7 +306,7 @@ async function seedOrg(exerciseIds: Map<string, string>) {
 
   if (maxRows.length) await db.insert(athleteMaxes).values(maxRows);
 
-  return { org, coach, athleteRows, squad, ptClient };
+  return athleteRows.length;
 }
 
 /* ------------------------------------------------------------------ *
@@ -285,21 +342,28 @@ function setRow(slotId: string, setNumber: number, s: TemplateSet) {
   };
 }
 
-async function seedTemplates(orgId: string, coachId: string, exerciseIds: Map<string, string>) {
-  for (const tpl of PROGRAM_TEMPLATES) {
+async function seedTemplates(
+  coach: CreatedCoach,
+  exerciseIds: Map<string, string>,
+  which: typeof PROGRAM_TEMPLATES,
+  isOrgShared: boolean,
+) {
+  for (const tpl of which) {
     const totalWeeks = tpl.blocks.reduce((n, b) => n + b.weeks, 0);
 
     const [program] = await db
       .insert(programs)
       .values({
-        orgId,
+        orgId: coach.orgId,
+        ownerCoachId: coach.userId,
+        isOrgShared,
         name: tpl.name,
         description: tpl.description,
         goal: tpl.goal,
         periodizationModel: tpl.model,
         durationWeeks: totalWeeks,
         isTemplate: true,
-        createdById: coachId,
+        createdById: coach.userId,
       })
       .returning();
 
@@ -394,7 +458,9 @@ async function seedTemplates(orgId: string, coachId: string, exerciseIds: Map<st
               await db
                 .insert(prescribedSets)
                 .values(
-                  weekSets.map((s, i) => setRow(insertedSlot.id, i + 1, s as TemplateSet)),
+                  weekSets.map((s, i) =>
+                    setRow(insertedSlot.id, i + 1, s as TemplateSet),
+                  ),
                 );
             }
           }
@@ -402,7 +468,7 @@ async function seedTemplates(orgId: string, coachId: string, exerciseIds: Map<st
       }
     }
 
-    console.log(`  · ${tpl.name} (${totalWeeks} weeks)`);
+    console.log(`    · ${tpl.name} (${totalWeeks} weeks)`);
   }
 }
 
@@ -411,21 +477,50 @@ async function seedTemplates(orgId: string, coachId: string, exerciseIds: Map<st
  * ------------------------------------------------------------------ */
 
 async function main() {
+  console.log(
+    useAdminApi
+      ? "Seeding against Supabase (Admin API)…"
+      : "Seeding against local Postgres (auth.users direct insert)…",
+  );
+
   console.log("Clearing existing data…");
   await clearAll();
 
   console.log("Seeding exercise library…");
   const exerciseIds = await seedExercises();
-  console.log(`  · ${exerciseIds.size} exercises`);
+  console.log(`  · ${exerciseIds.size} global exercises`);
 
-  console.log("Seeding demo organisation…");
-  const { org, coach, athleteRows } = await seedOrg(exerciseIds);
-  console.log(`  · ${org.name} with ${athleteRows.length} athletes`);
+  console.log("Seeding coaches…");
+  const coaches = await seedCoaches();
+  for (const c of coaches) {
+    console.log(`  · ${c.spec.name} <${c.spec.email}> — ${c.spec.orgName}`);
+  }
+
+  console.log("Seeding athletes and groups…");
+  for (const c of coaches) {
+    const n = await seedRoster(c, exerciseIds);
+    console.log(`  · ${c.spec.name}: ${n} athletes`);
+  }
 
   console.log("Seeding program templates…");
-  await seedTemplates(org.id, coach.id, exerciseIds);
+  const a1 = coaches.find((c) => c.spec.key === "a1")!;
+  const b1 = coaches.find((c) => c.spec.key === "b1")!;
+
+  console.log(`  ${a1.spec.name} (shared with their org):`);
+  await seedTemplates(a1, exerciseIds, PROGRAM_TEMPLATES, true);
+
+  // One private template in the other tenant, so cross-org isolation on
+  // programs is something the tests can actually observe.
+  console.log(`  ${b1.spec.name} (private):`);
+  await seedTemplates(b1, exerciseIds, PROGRAM_TEMPLATES.slice(0, 1), false);
 
   console.log("\nSeed complete.");
+  if (useAdminApi) {
+    console.log("\nSign in with any of:");
+    for (const c of SEED_COACHES) {
+      console.log(`  ${c.email}  /  ${c.password}`);
+    }
+  }
   process.exit(0);
 }
 
