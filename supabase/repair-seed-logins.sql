@@ -45,27 +45,33 @@ begin;
  * Each column is guarded: they do not all exist on every Supabase revision, and
  * an unguarded reference would abort the transaction.
  */
-do $$
-declare
-  col text;
-begin
-  foreach col in array array[
-    'confirmation_token', 'recovery_token', 'email_change',
-    'email_change_token_new', 'email_change_token_current',
-    'phone_change', 'phone_change_token', 'reauthentication_token'
-  ]
-  loop
-    if exists (
-      select 1 from information_schema.columns
-       where table_schema = 'auth' and table_name = 'users'
-         and column_name = col
-    ) then
-      execute format(
-        'update auth.users set %I = %L where %I is null', col, '', col
-      );
-    end if;
-  end loop;
-end $$;
+update auth.users set
+  confirmation_token         = coalesce(confirmation_token, ''),
+  recovery_token             = coalesce(recovery_token, ''),
+  email_change               = coalesce(email_change, ''),
+  email_change_token_new     = coalesce(email_change_token_new, ''),
+  email_change_token_current = coalesce(email_change_token_current, ''),
+  phone_change               = coalesce(phone_change, ''),
+  phone_change_token         = coalesce(phone_change_token, ''),
+  reauthentication_token     = coalesce(reauthentication_token, '');
+
+/*
+ * Then stop it happening again.
+ *
+ * Defaulting these to '' means a future insert that omits them — another seed
+ * run, a manual fixture, anything written by hand — cannot store the NULL that
+ * breaks sign-in. The auth service is unaffected either way, because it always
+ * writes these columns explicitly; the default only catches writers that don't.
+ */
+alter table auth.users
+  alter column confirmation_token         set default '',
+  alter column recovery_token             set default '',
+  alter column email_change               set default '',
+  alter column email_change_token_new     set default '',
+  alter column email_change_token_current set default '',
+  alter column phone_change               set default '',
+  alter column phone_change_token         set default '',
+  alter column reauthentication_token     set default '';
 
 update auth.users
    set encrypted_password = extensions.crypt(
