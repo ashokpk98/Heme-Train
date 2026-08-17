@@ -75,17 +75,32 @@ export function describeKey(key: string): {
     return { present: true, format: "unrecognised", length: key.length };
   }
   // Same for a service-role JWT.
-  try {
-    const payload = JSON.parse(
-      Buffer.from(key.split(".")[1] ?? "", "base64url").toString("utf8"),
-    ) as { role?: string };
-    if (payload.role === "service_role") {
-      return { present: true, format: "secret_do_not_use", length: key.length };
-    }
-  } catch {
-    // Not a decodable JWT; fall through.
+  const payload = decodeJwtPayload(key);
+  if (payload?.role === "service_role") {
+    return { present: true, format: "secret_do_not_use", length: key.length };
   }
   return { present: true, format: "anon_jwt", length: key.length };
+}
+
+/**
+ * Decodes a JWT payload without verifying it — enough to read the `role` claim.
+ *
+ * Uses `atob` rather than `Buffer`: this module is imported by `src/proxy.ts`,
+ * which can run in the Edge runtime where `Buffer` is not guaranteed.
+ */
+function decodeJwtPayload(token: string): { role?: string } | null {
+  const segment = token.split(".")[1];
+  if (!segment) return null;
+  try {
+    const base64 = segment.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = base64.padEnd(
+      base64.length + ((4 - (base64.length % 4)) % 4),
+      "=",
+    );
+    return JSON.parse(atob(padded)) as { role?: string };
+  } catch {
+    return null;
+  }
 }
 
 export interface DatabaseUrlReport {
