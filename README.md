@@ -187,6 +187,88 @@ the key was genuinely rejected rather than merely absent.
 `/api/health` flags the mis-encoded URL as `looksMisencoded`. Delete or gate the
 route before the app carries real client data.
 
+### Seeded logins refusing to sign in
+
+The login form reports `Email or password is incorrect.` for *every* failure,
+deliberately — distinguishing "no such user" from "wrong password" is an
+account-enumeration oracle. That is right for the form and useless for
+debugging, so two SQL files answer it instead:
+
+| File | What it does |
+|---|---|
+| `supabase/diagnose-auth.sql` | Read-only. Reports, per fixture account, whether the stored hash actually matches `heme-demo-1234`, whether the email is confirmed, and whether the identity and profile rows exist. |
+| `supabase/repair-seed-logins.sql` | Resets all of it together. Idempotent, and scoped to the three `@heme.test` accounts. |
+| `npm run auth:doctor` | Asks the auth service instead of the database. Use when the SQL says everything is fine and sign-in still fails. |
+
+The diagnostic works because pgcrypto verifies a hash in place —
+`crypt(plaintext, stored_hash)` re-hashes with the salt embedded in the stored
+hash, so it equals that hash exactly when the password is right. That is the
+same comparison Supabase's auth service makes, so the answer is direct rather
+than inferred.
+
+This is a consequence of how the seed was built: the accounts were inserted as
+SQL rows rather than created through Supabase's signup API, so every column the
+auth service checks had to be right by hand, and any single one being wrong
+produces the identical error. The repair also re-hashes at bcrypt cost 10, which
+is what Supabase's own signup produces — pgcrypto's `gen_salt('bf')` defaults to
+cost 6, which is valid and does verify, but leaving it differing from a real
+account is a subtle difference worth not having.
+
+**When the SQL says everything is fine and sign-in still fails**, stop asking the
+database and ask the auth service:
+
+```bash
+npm run auth:doctor
+```
+
+It signs in as each fixture account with the public key and prints the status
+and error code the service actually returned — `invalid_credentials`,
+`email_not_confirmed`, `email_provider_disabled`, `over_request_rate_limit` —
+which the login form is designed never to reveal. Anything still failing then
+gets its password set through the Admin API and retried.
+
+That second phase is the part SQL cannot do. It makes the auth service hash and
+store the password through its own code path, so the account stops being a
+hand-written row and becomes indistinguishable from one created by signup. User
+ids are preserved, so every seeded athlete, group and program stays attached to
+its coach. It needs `SUPABASE_SERVICE_ROLE_KEY` in `.env.local` for that phase
+only — add it, run, then take it back out.
+
+## Supabase MCP
+
+`.mcp.json` configures the Supabase MCP server, which lets an agent inspect the
+project directly — query tables, read logs, check advisors — instead of asking
+you to paste SQL output back and forth.
+
+It needs a personal access token, created at **Supabase → account settings →
+Access Tokens**. The token is read from the environment rather than stored in
+`.mcp.json`, so nothing secret is committed:
+
+```powershell
+$env:SUPABASE_ACCESS_TOKEN = "sbp_..."   # PowerShell, current session
+setx SUPABASE_ACCESS_TOKEN "sbp_..."     # persist across sessions
+```
+
+```bash
+export SUPABASE_ACCESS_TOKEN="sbp_..."   # macOS / Linux
+```
+
+Then restart Claude Code and check with `/mcp`.
+
+Two deliberate choices in that config. **`--read-only`** means the agent can
+look but not write; run schema changes yourself through the SQL Editor, where
+you can read them first. **`--features=database,debugging,docs`** withholds the
+account, storage, functions and branching tool groups, which nothing here needs.
+Widen either only when a task actually requires it.
+
+Worth knowing before pointing this at anything real: an MCP server that can read
+your database puts whatever is *in* that database in front of the model, and
+rows are not trusted input — an athlete-supplied note could contain text aimed
+at the agent reading it. Read-only mode bounds the damage but does not remove
+it. A development project with fixture data is the right place for this; a
+production one holding client data is not.
+
+
 > Next 16 renamed the `middleware` file convention to `proxy`. Session refresh
 > and route guarding live in `src/proxy.ts`, exporting `proxy` — not
 > `middleware`. The redirect there is convenience; the real boundary is RLS.
