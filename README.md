@@ -146,7 +146,18 @@ be developed and tested locally this way.
 Visit **`/api/health`** on any deployment. It reports which environment
 variables the running app can actually see, how the database URL parses, and
 whether Supabase auth and Postgres are reachable — no secret values, only
-formats and lengths. Two failures it exists to catch, because both are silent:
+formats and lengths.
+
+Add **`?signin=1`** to also attempt a real sign-in as the seeded coach. Worth
+doing once after seeding: the coach accounts are inserted as SQL rows carrying a
+bcrypt hash rather than created through Supabase's signup API, so "the database
+has 3 coaches" and "a coach can log in" are separate claims — a missing
+`auth.identities` row or an unset `email_confirmed_at` satisfies the first and
+fails the second. It is opt-in because Supabase rate-limits the token endpoint
+per IP, and a probe that ran on every page load would spend that budget and make
+real sign-ins fail with 429.
+
+Three failures this route exists to catch, because all three are silent:
 
 **The browser key under an unexpected name.** Supabase's current dashboard hands
 out a *publishable* key (`sb_publishable_…`) and suggests the variable name
@@ -167,8 +178,14 @@ postgresql://postgres.ref:/pa/ss@aws-0-region.pooler.supabase.com:6543/postgres
               database "pa/ss@aws-0-region.pooler.supabase.com:6543/postgres"
 ```
 
-`/api/health` flags this as `looksMisencoded`. Delete or gate the route before
-the app carries real client data.
+**A revoked legacy anon key.** Enabling the new `sb_publishable_` key format
+disables the legacy anon JWT. The app still starts, the login form still renders,
+and sign-in fails with a 401 that names nothing. `/api/health` reports this as
+`auth.status: 401` — the probe sends the `apikey` header, so a 401 there means
+the key was genuinely rejected rather than merely absent.
+
+`/api/health` flags the mis-encoded URL as `looksMisencoded`. Delete or gate the
+route before the app carries real client data.
 
 > Next 16 renamed the `middleware` file convention to `proxy`. Session refresh
 > and route guarding live in `src/proxy.ts`, exporting `proxy` — not
@@ -214,9 +231,17 @@ An athlete belongs to zero or more groups. A 1:1 personal-training client is sim
 
 ## Not yet built
 
-Auth is stubbed — every page resolves to the single seeded org via `getDemoOrg()`. `org_id` is already on every tenant-scoped table, so real auth replaces that one function rather than requiring a migration.
+**Program assignment and logging.** The tables exist and carry tenancy —
+`program_assignments`, `athlete_maxes`, `logged_sessions`, `logged_sets` — but
+nothing writes to them yet. This is the next slice, and what compliance,
+volume-load and ACWR are all computed from.
 
-Also outstanding: the athlete-facing app, VBT device integrations (the schema holds velocity fields; nothing syncs hardware yet), analytics dashboards, and report generation.
+**Athlete logins.** Coaches only for now. `logged_sets` already denormalises
+`athlete_id`, so athlete-scoped policies are an addition rather than a migration.
+
+Also outstanding: team invites (signup creates your own org today), VBT device
+integrations (the schema holds velocity fields; nothing syncs hardware yet),
+analytics dashboards, and report generation.
 
 ---
 
