@@ -141,6 +141,41 @@ be developed and tested locally this way.
 
 ---
 
+## Deployment troubleshooting
+
+Visit **`/api/health`** on any deployment. It reports which environment
+variables the running app can actually see, how the database URL parses, and
+whether Supabase auth and Postgres are reachable — no secret values, only
+formats and lengths. Two failures it exists to catch, because both are silent:
+
+**The browser key under an unexpected name.** Supabase's current dashboard hands
+out a *publishable* key (`sb_publishable_…`) and suggests the variable name
+`NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, where it used to hand out an anon JWT.
+Both that name and `NEXT_PUBLIC_SUPABASE_ANON_KEY` are accepted. On Vercel,
+`NEXT_PUBLIC_*` variables are read at build time — after adding them you must
+**redeploy**, not just restart.
+
+**A password that is not percent-encoded.** If your Postgres password contains
+`/`, `@`, `:` or `#`, it must be escaped (`/` → `%2F`, `@` → `%40`). Unescaped,
+the driver does *not* error — it silently parses the wrong host, port, user and
+database, then fails much later with something that points nowhere near the
+cause:
+
+```
+postgresql://postgres.ref:/pa/ss@aws-0-region.pooler.supabase.com:6543/postgres
+  parses as → host "postgres.ref"  port 5432  user "root"
+              database "pa/ss@aws-0-region.pooler.supabase.com:6543/postgres"
+```
+
+`/api/health` flags this as `looksMisencoded`. Delete or gate the route before
+the app carries real client data.
+
+> Next 16 renamed the `middleware` file convention to `proxy`. Session refresh
+> and route guarding live in `src/proxy.ts`, exporting `proxy` — not
+> `middleware`. The redirect there is convenience; the real boundary is RLS.
+
+---
+
 ## What's in the box
 
 **Exercise library — 213 exercises**, each tagged across the full taxonomy: movement pattern, category, laterality, force vector, contraction emphasis, equipment, primary/secondary muscles, tracked metrics, coaching cues and tags. Filterable and searchable, with alias matching (searching "RFESS" finds the Bulgarian split squat).

@@ -1,26 +1,21 @@
 import "server-only";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
+import { getSupabaseConfig, isAuthConfigured } from "@/lib/env";
 
-export const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
-export const SUPABASE_ANON_KEY =
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "";
-
-/** Whether Supabase credentials are configured. Guards a clearer error. */
-export function isAuthConfigured(): boolean {
-  return Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
-}
+export { isAuthConfigured };
 
 /**
  * Supabase client for server components, route handlers and server actions.
  *
  * Reads and writes the session cookies. Server components cannot set cookies,
- * so the setter is a no-op there — middleware is what refreshes the session.
+ * so the setter is a no-op there — `src/proxy.ts` is what refreshes the session.
  */
 export async function createClient() {
   const cookieStore = await cookies();
+  const { url, key } = getSupabaseConfig();
 
-  return createServerClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  return createServerClient(url, key, {
     cookies: {
       getAll() {
         return cookieStore.getAll();
@@ -31,7 +26,7 @@ export async function createClient() {
             cookieStore.set(name, value, options);
           }
         } catch {
-          // Called from a server component: middleware refreshes instead.
+          // Called from a server component: the proxy refreshes instead.
         }
       },
     },
