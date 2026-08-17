@@ -198,6 +198,7 @@ debugging, so two SQL files answer it instead:
 |---|---|
 | `supabase/diagnose-auth.sql` | Read-only. Reports, per fixture account, whether the stored hash actually matches `heme-demo-1234`, whether the email is confirmed, and whether the identity and profile rows exist. |
 | `supabase/repair-seed-logins.sql` | Resets all of it together. Idempotent, and scoped to the three `@heme.test` accounts. |
+| `npm run auth:doctor` | Asks the auth service instead of the database. Use when the SQL says everything is fine and sign-in still fails. |
 
 The diagnostic works because pgcrypto verifies a hash in place —
 `crypt(plaintext, stored_hash)` re-hashes with the salt embedded in the stored
@@ -212,6 +213,26 @@ produces the identical error. The repair also re-hashes at bcrypt cost 10, which
 is what Supabase's own signup produces — pgcrypto's `gen_salt('bf')` defaults to
 cost 6, which is valid and does verify, but leaving it differing from a real
 account is a subtle difference worth not having.
+
+**When the SQL says everything is fine and sign-in still fails**, stop asking the
+database and ask the auth service:
+
+```bash
+npm run auth:doctor
+```
+
+It signs in as each fixture account with the public key and prints the status
+and error code the service actually returned — `invalid_credentials`,
+`email_not_confirmed`, `email_provider_disabled`, `over_request_rate_limit` —
+which the login form is designed never to reveal. Anything still failing then
+gets its password set through the Admin API and retried.
+
+That second phase is the part SQL cannot do. It makes the auth service hash and
+store the password through its own code path, so the account stops being a
+hand-written row and becomes indistinguishable from one created by signup. User
+ids are preserved, so every seeded athlete, group and program stays attached to
+its coach. It needs `SUPABASE_SERVICE_ROLE_KEY` in `.env.local` for that phase
+only — add it, run, then take it back out.
 
 ## Supabase MCP
 

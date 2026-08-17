@@ -15,7 +15,8 @@
     "db:rls": "tsx --env-file-if-exists=.env.local scripts/apply-rls.ts",
     "db:generate": "drizzle-kit generate",
     "db:studio": "drizzle-kit studio",
-    "db:seed": "tsx --env-file-if-exists=.env.local src/lib/db/seed/index.ts"
+    "db:seed": "tsx --env-file-if-exists=.env.local src/lib/db/seed/index.ts",
+    "auth:doctor": "tsx --env-file-if-exists=.env.local scripts/auth-doctor.ts"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
