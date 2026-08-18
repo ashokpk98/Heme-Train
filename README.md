@@ -282,18 +282,46 @@ export SUPABASE_ACCESS_TOKEN="sbp_..."   # macOS / Linux
 
 Then restart Claude Code and check with `/mcp`.
 
-Two deliberate choices in that config. **`--read-only`** means the agent can
-look but not write; run schema changes yourself through the SQL Editor, where
-you can read them first. **`--features=database,debugging,docs`** withholds the
-account, storage, functions and branching tool groups, which nothing here needs.
-Widen either only when a task actually requires it.
+### What that config grants, and what it cannot
 
-Worth knowing before pointing this at anything real: an MCP server that can read
-your database puts whatever is *in* that database in front of the model, and
-rows are not trusted input — an athlete-supplied note could contain text aimed
-at the agent reading it. Read-only mode bounds the damage but does not remove
-it. A development project with fixture data is the right place for this; a
-production one holding client data is not.
+Write access is on: there is no `--read-only`, so the agent can run DML and DDL
+and apply migrations. `--features` admits database, debugging, development,
+docs, functions and storage. **`account` and `branching` are deliberately
+absent** — those create, pause and delete *projects* and incur cost, which is a
+different kind of mistake from a bad UPDATE. Dropping the flag entirely enables
+every group.
+
+Three limits are worth knowing because no setting anywhere lifts them:
+
+**Supabase-managed schemas stay locked.** The MCP runs SQL as `postgres`, the
+same role the SQL Editor uses. `auth.users` is owned by `supabase_auth_admin`,
+so `alter table auth.users …` fails with `must be owner of table users` no
+matter what the token or flags say. Rows in `auth.users` can be updated; its
+structure cannot.
+
+**These writes are not subject to your RLS policies.** That is what makes the
+seed and repair scripts work at all, and it means an agent-issued write can put
+a row under the wrong `owner_coach_id` and no policy will stop it. The isolation
+guarantee covers the *application*, not this connection.
+
+**The token is account-wide.** Supabase personal access tokens have no scopes —
+`--read-only` was a client-side restraint in the MCP server, not a limit on the
+credential. Anything holding that token can already reach every project on the
+account.
+
+### The risk that actually matters here
+
+An MCP server that reads your database puts whatever is *in* that database in
+front of the model, and rows are not trusted input — an athlete-supplied note
+could contain text written to influence the agent that reads it. With writes
+enabled, that stops being a disclosure problem and becomes a modification one.
+
+Right now the blast radius is genuinely small: every table in this project is
+reproducible from `supabase/dist/` plus the seed, so the worst case is a rebuild.
+That stops being true the moment real client data lands. Before that point,
+either move this MCP to a separate development project, or put `--read-only`
+back and run migrations through the SQL Editor. On the free plan there is no
+point-in-time recovery to fall back on.
 
 
 > Next 16 renamed the `middleware` file convention to `proxy`. Session refresh
